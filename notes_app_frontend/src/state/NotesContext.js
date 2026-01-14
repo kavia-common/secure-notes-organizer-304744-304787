@@ -2,6 +2,7 @@ import React, { createContext, useCallback, useContext, useMemo, useRef, useStat
 import { createNoteDraft, normalizeTags } from "../utils/notes";
 import { useLocalStorageState } from "../utils/useLocalStorageState";
 import { apiFetch, getApiBaseUrl } from "../services/apiClient";
+import { useToast } from "../components/ui/ToastProvider";
 
 const NotesContext = createContext(null);
 
@@ -9,6 +10,15 @@ function deriveAllTags(notes) {
   const s = new Set();
   for (const n of notes) for (const t of n.tags || []) s.add(t);
   return Array.from(s).sort((a, b) => a.localeCompare(b));
+}
+
+function toUserFacingApiError(err) {
+  const code = err?.code || "";
+  if (code === "NO_API_BASE") return null; // not an error; it's local mode
+  if (code === "TIMEOUT") return "API timeout. Using local notes for now.";
+  if (code === "NETWORK_ERROR") return "API unreachable. Using local notes for now.";
+  if (code === "HTTP_ERROR") return "API request failed. Using local notes for now.";
+  return "API error. Using local notes for now.";
 }
 
 /**
@@ -29,20 +39,20 @@ function computeInitialApiMode() {
  * If your backend implements different paths, update only these functions.
  */
 async function remoteListNotes() {
-  return apiFetch("/notes", { method: "GET" });
+  return apiFetch("/notes", { method: "GET", timeoutMs: 6500 });
 }
 async function remoteCreateNote(payload) {
-  return apiFetch("/notes", { method: "POST", body: JSON.stringify(payload) });
+  return apiFetch("/notes", { method: "POST", body: JSON.stringify(payload), timeoutMs: 6500 });
 }
 async function remoteUpdateNote(id, payload) {
-  return apiFetch(`/notes/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(payload) });
+  return apiFetch(`/notes/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(payload), timeoutMs: 6500 });
 }
 async function remoteDeleteNote(id) {
-  return apiFetch(`/notes/${encodeURIComponent(id)}`, { method: "DELETE" });
+  return apiFetch(`/notes/${encodeURIComponent(id)}`, { method: "DELETE", timeoutMs: 6500 });
 }
 async function remoteClearAllNotes() {
   // Optional backend endpoint. If missing, we'll fall back to local clear only.
-  return apiFetch("/notes", { method: "DELETE" });
+  return apiFetch("/notes", { method: "DELETE", timeoutMs: 6500 });
 }
 
 /**
@@ -53,6 +63,7 @@ async function remoteClearAllNotes() {
  */
 // PUBLIC_INTERFACE
 export function NotesProvider({ children, demoLoader }) {
+  const toast = useToast();
   const [notes, setNotes] = useLocalStorageState("sno.notes", []);
   const [hydrated, setHydrated] = useState(false);
 
@@ -60,8 +71,29 @@ export function NotesProvider({ children, demoLoader }) {
   // Users can still work offline because all mutations also update localStorage.
   const [apiModeEnabled] = useState(() => computeInitialApiMode());
   const apiFailureCountRef = useRef(0);
+  const lastToastAtRef = useRef(0);
 
   const storageMode = apiModeEnabled ? "api" : "local";
+
+  const maybeToastApiFailure = useCallback(
+    (err, { title = "API mode", dedupeWindowMs = 7000 } = {}) => {
+      if (!apiModeEnabled) return;
+      const msg = toUserFacingApiError(err);
+      if (!msg) return;
+
+      const now = Date.now();
+      if (now - lastToastAtRef.current < dedupeWindowMs) return;
+      lastToastAtRef.current = now;
+
+      toast.showToast({
+        title,
+        message: msg,
+        tone: "warning",
+        durationMs: 4800,
+      });
+    },
+    [apiModeEnabled, toast]
+  );
 
   const syncFromApiIfPossible = useCallback(async () => {
     if (!apiModeEnabled) return false;
@@ -73,11 +105,12 @@ export function NotesProvider({ children, demoLoader }) {
       setNotes(list);
       apiFailureCountRef.current = 0;
       return true;
-    } catch {
+    } catch (e) {
       apiFailureCountRef.current += 1;
+      maybeToastApiFailure(e, { title: "API sync" });
       return false;
     }
-  }, [apiModeEnabled, setNotes]);
+  }, [apiModeEnabled, setNotes, maybeToastApiFailure]);
 
   // One-time demo load / API hydration.
   React.useEffect(() => {
@@ -147,8 +180,9 @@ export function NotesProvider({ children, demoLoader }) {
                 });
               }
             }
-          } catch {
+          } catch (e) {
             apiFailureCountRef.current += 1;
+            maybeToastApiFailure(e, { title: "API save" });
             // graceful fallback: local already persisted
           }
         })();
@@ -156,7 +190,7 @@ export function NotesProvider({ children, demoLoader }) {
 
       return note;
     },
-    [apiModeEnabled, setNotes]
+    [apiModeEnabled, setNotes, maybeToastApiFailure]
   );
 
   const updateNote = useCallback(
@@ -196,14 +230,15 @@ export function NotesProvider({ children, demoLoader }) {
                 return list.map((n) => (n.id === id ? { ...n, ...updated } : n));
               });
             }
-          } catch {
+          } catch (e) {
             apiFailureCountRef.current += 1;
+            maybeToastApiFailure(e, { title: "API update" });
             // graceful fallback: local already updated
           }
         })();
       }
     },
-    [apiModeEnabled, setNotes]
+    [apiModeEnabled, setNotes, maybeToastApiFailure]
   );
 
   const deleteNote = useCallback(
@@ -216,14 +251,15 @@ export function NotesProvider({ children, demoLoader }) {
           try {
             await remoteDeleteNote(id);
             apiFailureCountRef.current = 0;
-          } catch {
+          } catch (e) {
             apiFailureCountRef.current += 1;
+            maybeToastApiFailure(e, { title: "API delete" });
             // graceful fallback: local already deleted
           }
         })();
       }
     },
-    [apiModeEnabled, setNotes]
+    [apiModeEnabled, setNotes, maybeToastApiFailure]
   );
 
   const togglePinned = useCallback(
@@ -244,13 +280,14 @@ export function NotesProvider({ children, demoLoader }) {
           try {
             await remoteUpdateNote(id, { pinned: nextPinned, updatedAt: Date.now() });
             apiFailureCountRef.current = 0;
-          } catch {
+          } catch (e) {
             apiFailureCountRef.current += 1;
+            maybeToastApiFailure(e, { title: "API update" });
           }
         })();
       }
     },
-    [apiModeEnabled, notes, setNotes]
+    [apiModeEnabled, notes, setNotes, maybeToastApiFailure]
   );
 
   const clearAllNotes = useCallback(() => {
@@ -261,13 +298,14 @@ export function NotesProvider({ children, demoLoader }) {
         try {
           await remoteClearAllNotes();
           apiFailureCountRef.current = 0;
-        } catch {
+        } catch (e) {
           apiFailureCountRef.current += 1;
+          maybeToastApiFailure(e, { title: "API clear" });
           // graceful fallback: local already cleared
         }
       })();
     }
-  }, [apiModeEnabled, setNotes]);
+  }, [apiModeEnabled, setNotes, maybeToastApiFailure]);
 
   const getNoteById = useCallback(
     (id) => {

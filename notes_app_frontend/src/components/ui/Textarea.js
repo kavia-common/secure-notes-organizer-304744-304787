@@ -4,7 +4,7 @@ import React from "react";
  * Labeled textarea component.
  */
 // PUBLIC_INTERFACE
-export function Textarea({ label, value, onChange, placeholder, name, id, rows }) {
+export function Textarea({ label, value, onChange, placeholder, name, id, rows, describedBy }) {
   const areaId = id || name || `textarea_${label || "field"}`;
   return (
     <div style={{ width: "100%" }}>
@@ -20,6 +20,7 @@ export function Textarea({ label, value, onChange, placeholder, name, id, rows }
         value={value}
         rows={rows}
         placeholder={placeholder}
+        aria-describedby={describedBy}
         onChange={(e) => onChange?.(e.target.value)}
       />
     </div>

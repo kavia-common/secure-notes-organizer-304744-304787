@@ -3,16 +3,19 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { useNotes } from "../../state/NotesContext";
 import { useFeatureFlags } from "../../utils/featureFlags";
 import { useFocusTrap } from "../../utils/useFocusTrap";
+import { useSettings } from "../../state/SettingsContext";
 import { Button } from "../ui/Button";
 import { Modal } from "../ui/Modal";
+import { Select } from "../ui/Select";
 
 /**
- * Sidebar: tags list, pinned shortcut, and local-only info.
+ * Sidebar: tags list, pinned shortcut, settings, and local-only info.
  */
 // PUBLIC_INTERFACE
 export function Sidebar({ open, onClose }) {
   const { allTags, clearAllNotes, storageMode } = useNotes();
   const flags = useFeatureFlags();
+  const settings = useSettings();
   const nav = useNavigate();
   const loc = useLocation();
   const [confirmOpen, setConfirmOpen] = React.useState(false);
@@ -74,7 +77,7 @@ export function Sidebar({ open, onClose }) {
           <div>
             <div className="h2">Filters</div>
             <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
-              Organize by tag & priority
+              Organize by tag, color & priority
             </div>
           </div>
           <Button
@@ -82,8 +85,6 @@ export function Sidebar({ open, onClose }) {
             className="iconBtn"
             onClick={onClose}
             ariaLabel="Close menu"
-            // allow focus trap initial focus for mobile
-            ref={undefined}
           >
             <span ref={closeBtnRef}>×</span>
           </Button>
@@ -122,6 +123,42 @@ export function Sidebar({ open, onClose }) {
               ))}
             </div>
           )}
+        </div>
+
+        <div className="divider" />
+
+        <div>
+          <div className="h2">Settings</div>
+          <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+            Persisted to localStorage (feature-flag namespace).
+          </div>
+
+          <div style={{ marginTop: 10 }}>
+            <label className="label" htmlFor="compactDensityToggle">
+              List density
+            </label>
+            <button
+              id="compactDensityToggle"
+              type="button"
+              className={`chip ${settings.compactDensity ? "chipAmber" : ""}`}
+              onClick={() => settings.setCompactDensity((v) => !v)}
+              aria-pressed={settings.compactDensity}
+              title="Toggle compact spacing in lists"
+            >
+              {settings.compactDensity ? "Compact" : "Comfortable"}
+            </button>
+          </div>
+
+          <div style={{ marginTop: 10 }}>
+            <Select
+              label="Accent"
+              value={settings.accentId}
+              onChange={(v) => settings.setAccentId(v)}
+              options={settings.accents.map((a) => ({ value: a.id, label: a.label }))}
+              name="accent"
+              id="accentSelect"
+            />
+          </div>
         </div>
 
         <div className="divider" />

@@ -1,21 +1,24 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useNotes } from "../state/NotesContext";
-import { filterNotes, NOTE_COLORS, noteSnippet, sortNotes } from "../utils/notes";
+import { filterNotes, NOTE_COLORS, sortNotes } from "../utils/notes";
 import { useDebouncedValue } from "../utils/useDebouncedValue";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 import { Select } from "../components/ui/Select";
-import { Card } from "../components/ui/Card";
 import { TagChip } from "../components/ui/TagChip";
+import { NoteCard } from "../components/notes/NoteCard";
+import { useSettings } from "../state/SettingsContext";
 
 // PUBLIC_INTERFACE
 export function NotesListPage() {
   const nav = useNavigate();
   const { notes, hydrated, togglePinned } = useNotes();
+  const settings = useSettings();
   const [params, setParams] = useSearchParams();
 
   const tag = params.get("tag") || "";
+  const color = params.get("c") || "";
 
   // Keep local input state for immediate typing responsiveness; sync URL via debounce.
   const [queryInput, setQueryInput] = useState(params.get("q") || "");
@@ -23,6 +26,10 @@ export function NotesListPage() {
 
   const [priority, setPriority] = useState(params.get("p") || "");
   const [sortKey, setSortKey] = useState(params.get("sort") || "updated");
+
+  // Keyboard shortcut: "P" toggles pinned for the currently "selected" note.
+  // We track selection via click/focus on cards.
+  const selectedNoteIdRef = useRef("");
 
   // Ensure local state stays in sync when user navigates back/forward or sidebar changes params.
   useEffect(() => {
@@ -46,21 +53,39 @@ export function NotesListPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [debouncedQuery]);
 
+  useEffect(() => {
+    const onKeyDown = (e) => {
+      // Don't hijack typing in fields.
+      const target = e.target;
+      const tagName = target?.tagName?.toLowerCase();
+      const isTypingTarget = tagName === "input" || tagName === "textarea" || tagName === "select" || target?.isContentEditable;
+      if (isTypingTarget) return;
+
+      // Pin/unpin: "p"
+      if (e.key?.toLowerCase() === "p") {
+        const id = selectedNoteIdRef.current;
+        if (!id) return;
+        e.preventDefault();
+        togglePinned(id);
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [togglePinned]);
+
   const filtered = useMemo(() => {
+    // Color filter is a small extension: filterNotes doesn't include color, so we apply it here to preserve existing architecture.
     const list = filterNotes(notes, { query: debouncedQuery, tag, priority });
-    return sortNotes(list, sortKey);
-  }, [notes, debouncedQuery, tag, priority, sortKey]);
+    const colorFiltered = color ? list.filter((n) => String(n.color || "") === String(color)) : list;
+    return sortNotes(colorFiltered, sortKey);
+  }, [notes, debouncedQuery, tag, priority, sortKey, color]);
 
   const tagsForQuick = useMemo(() => {
     const s = new Set();
     for (const n of notes) for (const t of n.tags || []) s.add(t);
     return Array.from(s).slice(0, 10);
   }, [notes]);
-
-  const colorMap = useMemo(() => {
-    const m = new Map(NOTE_COLORS.map((c) => [c.id, c.swatch]));
-    return m;
-  }, []);
 
   return (
     <section className="panel" aria-label="Notes list">
@@ -95,6 +120,7 @@ export function NotesListPage() {
                     setQueryInput("");
                     setParam("q", "");
                   }}
+                  ariaLabel="Clear search"
                 >
                   Clear
                 </Button>
@@ -119,6 +145,18 @@ export function NotesListPage() {
             />
           </div>
 
+          <div style={{ width: 180 }}>
+            <Select
+              label="Color"
+              value={color}
+              onChange={(v) => setParam("c", v)}
+              options={[
+                { value: "", label: "Any" },
+                ...NOTE_COLORS.map((c) => ({ value: c.id, label: c.label })),
+              ]}
+            />
+          </div>
+
           <div style={{ width: 200 }}>
             <Select
               label="Sort"
@@ -136,6 +174,17 @@ export function NotesListPage() {
           </div>
         </div>
 
+        <div style={{ marginTop: 10 }} className="rowWrap" aria-label="Keyboard shortcuts">
+          <span className="chip" title="Pin/unpin selected note with keyboard">
+            Pin <span className="kbd">P</span>
+          </span>
+          {color ? (
+            <Button variant="ghost" onClick={() => setParam("c", "")} ariaLabel="Clear color filter">
+              Clear color
+            </Button>
+          ) : null}
+        </div>
+
         {tagsForQuick.length ? (
           <div style={{ marginTop: 10 }}>
             <div className="label">Quick tags</div>
@@ -149,7 +198,7 @@ export function NotesListPage() {
                 />
               ))}
               {tag ? (
-                <Button variant="ghost" onClick={() => setParam("tag", "")}>
+                <Button variant="ghost" onClick={() => setParam("tag", "")} ariaLabel="Clear tag filter">
                   Clear tag
                 </Button>
               ) : null}
@@ -185,52 +234,23 @@ export function NotesListPage() {
         ) : (
           <div className="gridCards" role="list" aria-label="Notes results">
             {filtered.map((n) => (
-              <Card
+              <div
                 key={n.id}
-                ariaLabel={`Open note ${n.title || "Untitled"}`}
-                onClick={() => nav(`/notes/${n.id}`)}
-                style={{
-                  background: `linear-gradient(180deg, ${colorMap.get(n.color) || "rgba(37, 99, 235, 0.10)"}, transparent 75%), var(--surface)`,
+                role="listitem"
+                onFocusCapture={() => {
+                  selectedNoteIdRef.current = n.id;
+                }}
+                onMouseDownCapture={() => {
+                  selectedNoteIdRef.current = n.id;
                 }}
               >
-                <div className="row" style={{ justifyContent: "space-between" }}>
-                  <h3 className="cardTitle">{n.title || "Untitled"}</h3>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    className="iconBtn"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      togglePinned(n.id);
-                    }}
-                    ariaLabel={`${n.pinned ? "Unpin" : "Pin"} note: ${n.title || "Untitled"}`}
-                  >
-                    {n.pinned ? "★" : "☆"}
-                  </Button>
-                </div>
-
-                <div className="cardMeta">
-                  {n.priority ? <span className="chip chipAmber" style={{ marginRight: 8 }}>{n.priority}</span> : null}
-                  <span className="muted">
-                    Updated {new Date(n.updatedAt || n.createdAt).toLocaleString()}
-                  </span>
-                </div>
-
-                <div style={{ marginTop: 10, color: "var(--text-muted)", fontSize: 13, lineHeight: 1.35 }}>
-                  {noteSnippet(n.content)}
-                </div>
-
-                {(n.tags || []).length ? (
-                  <div className="rowWrap" style={{ marginTop: 10 }}>
-                    {(n.tags || []).slice(0, 4).map((t) => (
-                      <span key={t} className="chip">
-                        #{t}
-                      </span>
-                    ))}
-                    {(n.tags || []).length > 4 ? <span className="chip">+{(n.tags || []).length - 4}</span> : null}
-                  </div>
-                ) : null}
-              </Card>
+                <NoteCard
+                  note={n}
+                  compact={settings.compactDensity}
+                  onOpen={() => nav(`/notes/${n.id}`)}
+                  onTogglePinned={() => togglePinned(n.id)}
+                />
+              </div>
             ))}
           </div>
         )}

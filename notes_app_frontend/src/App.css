@@ -431,3 +431,55 @@
   padding: 12px 14px;
   box-shadow: var(--shadow-md);
 }
+
+/* Toast viewport */
+.toastViewport {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 90;
+  width: min(420px, calc(100vw - 32px));
+  display: grid;
+  gap: 10px;
+  pointer-events: none;
+}
+.toastItem {
+  pointer-events: auto;
+  transform: translate3d(0, 0, 0);
+  animation: toastIn 180ms ease-out;
+  will-change: transform, opacity;
+}
+@keyframes toastIn {
+  from { opacity: 0; transform: translate3d(0, 10px, 0); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+.toastItemInfo { border-left: 4px solid rgba(37, 99, 235, 0.6); }
+.toastItemSuccess { border-left: 4px solid rgba(16, 185, 129, 0.65); }
+.toastItemWarning { border-left: 4px solid rgba(245, 158, 11, 0.75); }
+.toastItemError { border-left: 4px solid rgba(239, 68, 68, 0.75); }
+
+/* Reduce motion support */
+@media (prefers-reduced-motion: reduce) {
+  .toastItem {
+    animation: none;
+  }
+  .btn, .card {
+    transition: none;
+  }
+}
+
+/* Notes list performance/density */
+.noteCard {
+  will-change: transform;
+  transform: translate3d(0, 0, 0);
+}
+.cardCompact .cardBody {
+  padding: 10px 12px;
+}
+.cardCompact .cardTitle {
+  margin-bottom: 4px;
+  font-size: 14px;
+}
+.cardCompact .cardMeta {
+  font-size: 12px;
+}
