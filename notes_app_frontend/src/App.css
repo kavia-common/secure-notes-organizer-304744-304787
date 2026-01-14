@@ -194,6 +194,14 @@
   .contentWrap {
     grid-template-columns: 1fr;
   }
+
+  .sidebarBackdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 45;
+    background: rgba(3, 7, 18, 0.45);
+  }
+
   .sidebar {
     position: fixed;
     z-index: 50;
@@ -343,6 +351,10 @@
   color: var(--text);
   font-size: 12px;
   font-weight: 700;
+}
+.chip:focus-visible {
+  outline: none;
+  box-shadow: var(--focus);
 }
 .chipAmber {
   background: rgba(245, 158, 11, 0.10);

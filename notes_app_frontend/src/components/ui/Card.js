@@ -10,6 +10,7 @@ export function Card({ children, style, onClick, ariaLabel }) {
 
   return (
     <Component
+      type={clickable ? "button" : undefined}
       className="card"
       onClick={onClick}
       style={{

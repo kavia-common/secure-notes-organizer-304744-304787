@@ -171,13 +171,14 @@ export function NotesListPage() {
                 <div className="row" style={{ justifyContent: "space-between" }}>
                   <h3 className="cardTitle">{n.title || "Untitled"}</h3>
                   <Button
+                    type="button"
                     variant="ghost"
                     className="iconBtn"
                     onClick={(e) => {
                       e.stopPropagation();
                       togglePinned(n.id);
                     }}
-                    ariaLabel={n.pinned ? "Unpin note" : "Pin note"}
+                    ariaLabel={`${n.pinned ? "Unpin" : "Pin"} note: ${n.title || "Untitled"}`}
                   >
                     {n.pinned ? "★" : "☆"}
                   </Button>

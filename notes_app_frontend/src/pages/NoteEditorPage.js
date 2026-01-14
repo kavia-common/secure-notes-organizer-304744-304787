@@ -114,9 +114,21 @@ export function NoteEditorPage({ mode }) {
         </div>
 
         {error ? (
-          <div className="toast" role="alert" style={{ marginTop: 12, borderColor: "rgba(239, 68, 68, 0.35)" }}>
+          <div
+            className="toast"
+            role="alert"
+            aria-live="assertive"
+            style={{ marginTop: 12, borderColor: "rgba(239, 68, 68, 0.35)" }}
+          >
             <strong style={{ display: "block", marginBottom: 6 }}>Error</strong>
             <div className="muted">{error}</div>
+          </div>
+        ) : null}
+
+        {!canSave ? (
+          <div className="toast" role="status" aria-live="polite" style={{ marginTop: 12 }}>
+            <strong style={{ display: "block", marginBottom: 6 }}>Nothing to save yet</strong>
+            <div className="muted">Add a title or some content to enable saving.</div>
           </div>
         ) : null}
       </div>
