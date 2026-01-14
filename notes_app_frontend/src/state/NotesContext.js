@@ -1,6 +1,7 @@
-import React, { createContext, useCallback, useContext, useMemo, useState } from "react";
+import React, { createContext, useCallback, useContext, useMemo, useRef, useState } from "react";
 import { createNoteDraft, normalizeTags } from "../utils/notes";
 import { useLocalStorageState } from "../utils/useLocalStorageState";
+import { apiFetch, getApiBaseUrl } from "../services/apiClient";
 
 const NotesContext = createContext(null);
 
@@ -11,81 +12,270 @@ function deriveAllTags(notes) {
 }
 
 /**
+ * Best-effort detection of API mode:
+ * - If REACT_APP_API_BASE or REACT_APP_BACKEND_URL is present, we default to API mode
+ * - Otherwise default to local mode
+ *
+ * NOTE: We keep localStorage persistence intact always, and gracefully fall back to local
+ * on API failures.
+ */
+function computeInitialApiMode() {
+  const base = getApiBaseUrl();
+  return !!base;
+}
+
+/**
+ * Minimal remote adapter.
+ * If your backend implements different paths, update only these functions.
+ */
+async function remoteListNotes() {
+  return apiFetch("/notes", { method: "GET" });
+}
+async function remoteCreateNote(payload) {
+  return apiFetch("/notes", { method: "POST", body: JSON.stringify(payload) });
+}
+async function remoteUpdateNote(id, payload) {
+  return apiFetch(`/notes/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(payload) });
+}
+async function remoteDeleteNote(id) {
+  return apiFetch(`/notes/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+async function remoteClearAllNotes() {
+  // Optional backend endpoint. If missing, we'll fall back to local clear only.
+  return apiFetch("/notes", { method: "DELETE" });
+}
+
+/**
  * Provides note storage and actions.
  * Uses localStorage persistence; can optionally seed demo notes if enabled.
+ * When API mode is enabled (via REACT_APP_API_BASE/REACT_APP_BACKEND_URL), attempts
+ * to read/write to backend first, and falls back to local storage on failures.
  */
 // PUBLIC_INTERFACE
 export function NotesProvider({ children, demoLoader }) {
   const [notes, setNotes] = useLocalStorageState("sno.notes", []);
   const [hydrated, setHydrated] = useState(false);
 
-  // One-time demo load: only when no notes exist.
+  // API mode is auto-enabled only if env base URL is present.
+  // Users can still work offline because all mutations also update localStorage.
+  const [apiModeEnabled] = useState(() => computeInitialApiMode());
+  const apiFailureCountRef = useRef(0);
+
+  const storageMode = apiModeEnabled ? "api" : "local";
+
+  const syncFromApiIfPossible = useCallback(async () => {
+    if (!apiModeEnabled) return false;
+    try {
+      const res = await remoteListNotes();
+      // Accept either {notes:[...]} or [...] as response shapes.
+      const list = Array.isArray(res) ? res : Array.isArray(res?.notes) ? res.notes : null;
+      if (!Array.isArray(list)) throw new Error("Unexpected /notes response shape.");
+      setNotes(list);
+      apiFailureCountRef.current = 0;
+      return true;
+    } catch {
+      apiFailureCountRef.current += 1;
+      return false;
+    }
+  }, [apiModeEnabled, setNotes]);
+
+  // One-time demo load / API hydration.
   React.useEffect(() => {
     if (hydrated) return;
+
+    // Mark hydrated immediately to avoid double-running.
     setHydrated(true);
 
-    if (Array.isArray(notes) && notes.length > 0) return;
+    // If API mode is enabled, attempt to hydrate from API first.
+    // If it fails, we keep local notes and continue.
+    (async () => {
+      const didApiHydrate = await syncFromApiIfPossible();
+      if (didApiHydrate) return;
 
-    try {
-      const demoNotes = demoLoader?.();
-      if (Array.isArray(demoNotes) && demoNotes.length > 0) {
-        setNotes(demoNotes);
+      // Local demo load: only when no notes exist.
+      if (Array.isArray(notes) && notes.length > 0) return;
+
+      try {
+        const demoNotes = demoLoader?.();
+        if (Array.isArray(demoNotes) && demoNotes.length > 0) {
+          setNotes(demoNotes);
+        }
+      } catch {
+        // ignore demo load failures
       }
-    } catch {
-      // ignore demo load failures
-    }
+    })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hydrated]);
 
-  const createNote = useCallback((partial) => {
-    const now = Date.now();
-    const draft = createNoteDraft();
-    const note = {
-      ...draft,
-      ...partial,
-      tags: normalizeTags(partial?.tags ?? []),
-      createdAt: now,
-      updatedAt: now,
-    };
-    setNotes((prev) => [note, ...(Array.isArray(prev) ? prev : [])]);
-    return note;
-  }, [setNotes]);
+  const createNote = useCallback(
+    (partial) => {
+      const now = Date.now();
+      const draft = createNoteDraft();
+      const note = {
+        ...draft,
+        ...partial,
+        tags: normalizeTags(partial?.tags ?? []),
+        createdAt: now,
+        updatedAt: now,
+      };
 
-  const updateNote = useCallback((id, patch) => {
-    const now = Date.now();
-    setNotes((prev) => {
-      const list = Array.isArray(prev) ? prev : [];
-      return list.map((n) => {
-        if (n.id !== id) return n;
-        return {
-          ...n,
-          ...patch,
-          tags: patch?.tags != null ? normalizeTags(patch.tags) : (n.tags || []),
-          updatedAt: now,
-        };
+      // Always write through to local first to preserve existing behavior and
+      // guarantee offline/preview compatibility.
+      setNotes((prev) => [note, ...(Array.isArray(prev) ? prev : [])]);
+
+      // Best-effort remote write.
+      if (apiModeEnabled) {
+        (async () => {
+          try {
+            const res = await remoteCreateNote(note);
+            apiFailureCountRef.current = 0;
+
+            // If backend returns a canonical note (e.g., server-generated id), reconcile locally.
+            const created = res?.note || res;
+            if (created && typeof created === "object") {
+              const remoteId = created.id;
+              if (remoteId && remoteId !== note.id) {
+                setNotes((prev) => {
+                  const list = Array.isArray(prev) ? prev : [];
+                  return list.map((n) => (n.id === note.id ? { ...n, ...created } : n));
+                });
+              } else {
+                // Still merge any server fields (e.g., updatedAt normalization).
+                setNotes((prev) => {
+                  const list = Array.isArray(prev) ? prev : [];
+                  return list.map((n) => (n.id === note.id ? { ...n, ...created } : n));
+                });
+              }
+            }
+          } catch {
+            apiFailureCountRef.current += 1;
+            // graceful fallback: local already persisted
+          }
+        })();
+      }
+
+      return note;
+    },
+    [apiModeEnabled, setNotes]
+  );
+
+  const updateNote = useCallback(
+    (id, patch) => {
+      const now = Date.now();
+
+      // Update locally first.
+      setNotes((prev) => {
+        const list = Array.isArray(prev) ? prev : [];
+        return list.map((n) => {
+          if (n.id !== id) return n;
+          return {
+            ...n,
+            ...patch,
+            tags: patch?.tags != null ? normalizeTags(patch.tags) : n.tags || [],
+            updatedAt: now,
+          };
+        });
       });
-    });
-  }, [setNotes]);
 
-  const deleteNote = useCallback((id) => {
-    setNotes((prev) => (Array.isArray(prev) ? prev.filter((n) => n.id !== id) : []));
-  }, [setNotes]);
+      if (apiModeEnabled) {
+        (async () => {
+          try {
+            const payload = {
+              ...patch,
+              tags: patch?.tags != null ? normalizeTags(patch.tags) : undefined,
+              updatedAt: now,
+            };
+            const res = await remoteUpdateNote(id, payload);
+            apiFailureCountRef.current = 0;
 
-  const togglePinned = useCallback((id) => {
-    setNotes((prev) => {
-      const list = Array.isArray(prev) ? prev : [];
-      return list.map((n) => (n.id === id ? { ...n, pinned: !n.pinned, updatedAt: Date.now() } : n));
-    });
-  }, [setNotes]);
+            // Merge any returned note fields
+            const updated = res?.note || res;
+            if (updated && typeof updated === "object") {
+              setNotes((prev) => {
+                const list = Array.isArray(prev) ? prev : [];
+                return list.map((n) => (n.id === id ? { ...n, ...updated } : n));
+              });
+            }
+          } catch {
+            apiFailureCountRef.current += 1;
+            // graceful fallback: local already updated
+          }
+        })();
+      }
+    },
+    [apiModeEnabled, setNotes]
+  );
+
+  const deleteNote = useCallback(
+    (id) => {
+      // Local first
+      setNotes((prev) => (Array.isArray(prev) ? prev.filter((n) => n.id !== id) : []));
+
+      if (apiModeEnabled) {
+        (async () => {
+          try {
+            await remoteDeleteNote(id);
+            apiFailureCountRef.current = 0;
+          } catch {
+            apiFailureCountRef.current += 1;
+            // graceful fallback: local already deleted
+          }
+        })();
+      }
+    },
+    [apiModeEnabled, setNotes]
+  );
+
+  const togglePinned = useCallback(
+    (id) => {
+      // Local first; mirror to API via update
+      setNotes((prev) => {
+        const list = Array.isArray(prev) ? prev : [];
+        return list.map((n) => (n.id === id ? { ...n, pinned: !n.pinned, updatedAt: Date.now() } : n));
+      });
+
+      if (apiModeEnabled) {
+        // Find latest value (best effort)
+        const list = Array.isArray(notes) ? notes : [];
+        const current = list.find((n) => n.id === id);
+        const nextPinned = !current?.pinned;
+
+        (async () => {
+          try {
+            await remoteUpdateNote(id, { pinned: nextPinned, updatedAt: Date.now() });
+            apiFailureCountRef.current = 0;
+          } catch {
+            apiFailureCountRef.current += 1;
+          }
+        })();
+      }
+    },
+    [apiModeEnabled, notes, setNotes]
+  );
 
   const clearAllNotes = useCallback(() => {
     setNotes([]);
-  }, [setNotes]);
 
-  const getNoteById = useCallback((id) => {
-    const list = Array.isArray(notes) ? notes : [];
-    return list.find((n) => n.id === id) || null;
-  }, [notes]);
+    if (apiModeEnabled) {
+      (async () => {
+        try {
+          await remoteClearAllNotes();
+          apiFailureCountRef.current = 0;
+        } catch {
+          apiFailureCountRef.current += 1;
+          // graceful fallback: local already cleared
+        }
+      })();
+    }
+  }, [apiModeEnabled, setNotes]);
+
+  const getNoteById = useCallback(
+    (id) => {
+      const list = Array.isArray(notes) ? notes : [];
+      return list.find((n) => n.id === id) || null;
+    },
+    [notes]
+  );
 
   const allTags = useMemo(() => deriveAllTags(Array.isArray(notes) ? notes : []), [notes]);
 
@@ -94,6 +284,8 @@ export function NotesProvider({ children, demoLoader }) {
       notes: Array.isArray(notes) ? notes : [],
       allTags,
       hydrated,
+      storageMode,
+      apiModeEnabled,
       createNote,
       updateNote,
       deleteNote,
@@ -101,7 +293,7 @@ export function NotesProvider({ children, demoLoader }) {
       clearAllNotes,
       getNoteById,
     };
-  }, [notes, allTags, hydrated, createNote, updateNote, deleteNote, togglePinned, clearAllNotes, getNoteById]);
+  }, [notes, allTags, hydrated, storageMode, apiModeEnabled, createNote, updateNote, deleteNote, togglePinned, clearAllNotes, getNoteById]);
 
   return <NotesContext.Provider value={value}>{children}</NotesContext.Provider>;
 }

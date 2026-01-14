@@ -11,7 +11,7 @@ import { Modal } from "../ui/Modal";
  */
 // PUBLIC_INTERFACE
 export function Sidebar({ open, onClose }) {
-  const { allTags, clearAllNotes } = useNotes();
+  const { allTags, clearAllNotes, storageMode } = useNotes();
   const flags = useFeatureFlags();
   const nav = useNavigate();
   const loc = useLocation();
@@ -129,16 +129,25 @@ export function Sidebar({ open, onClose }) {
         <div>
           <div className="label">About</div>
           <div className="muted" style={{ fontSize: 13, lineHeight: 1.4 }}>
-            Notes are stored locally in your browser (localStorage). Configure{" "}
-            <span className="kbd">REACT_APP_API_BASE</span> to connect to a backend later.
+            {storageMode === "api" ? (
+              <>
+                Connected to backend API via <span className="kbd">REACT_APP_API_BASE</span>/<span className="kbd">REACT_APP_BACKEND_URL</span>.
+                Local storage remains enabled as a fallback.
+              </>
+            ) : (
+              <>
+                Notes are stored locally in your browser (localStorage). Configure{" "}
+                <span className="kbd">REACT_APP_API_BASE</span> to connect to a backend later.
+              </>
+            )}
           </div>
           {flags.demoData ? (
             <div style={{ marginTop: 10 }} className="chip chipAmber">
               Demo data enabled
             </div>
           ) : (
-            <div style={{ marginTop: 10 }} className="chip">
-              Local-only mode
+            <div style={{ marginTop: 10 }} className={`chip ${storageMode === "api" ? "chipAmber" : ""}`}>
+              {storageMode === "api" ? "API mode" : "Local mode"}
             </div>
           )}
         </div>

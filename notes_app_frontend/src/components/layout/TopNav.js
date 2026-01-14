@@ -1,11 +1,17 @@
 import React from "react";
 import { Button } from "../ui/Button";
+import { useNotes } from "../../state/NotesContext";
 
 /**
  * Top navigation: brand, mobile menu, New Note, theme toggle.
  */
 // PUBLIC_INTERFACE
 export function TopNav({ onToggleSidebar, onGoHome, onNewNote, onToggleTheme, themeLabel }) {
+  const { storageMode } = useNotes();
+
+  const isApi = storageMode === "api";
+  const modeLabel = isApi ? "API Mode" : "Local Mode";
+
   return (
     <div className="topNavInner">
       <Button variant="ghost" className="iconBtn" onClick={onToggleSidebar} ariaLabel="Open menu">
@@ -31,6 +37,13 @@ export function TopNav({ onToggleSidebar, onGoHome, onNewNote, onToggleTheme, th
       <div className="navSpacer" />
 
       <div className="row">
+        <span
+          className={`chip ${isApi ? "chipAmber" : ""}`}
+          title={isApi ? "Using configured backend API" : "Using browser localStorage"}
+        >
+          {modeLabel}
+        </span>
+
         <span className="chip" title="Keyboard tip">
           Tip <span className="kbd">Ctrl</span> <span className="kbd">K</span>
         </span>

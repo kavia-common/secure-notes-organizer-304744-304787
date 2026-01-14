@@ -6,7 +6,7 @@ import { useMemo } from "react";
 function parseFlags(raw) {
   if (!raw) return new Set();
   return new Set(
-    raw
+    String(raw)
       .split(/[,\s]+/g)
       .map((s) => s.trim())
       .filter(Boolean)
@@ -14,18 +14,26 @@ function parseFlags(raw) {
   );
 }
 
-function parseBoolean(raw) {
+// PUBLIC_INTERFACE
+export function parseBooleanEnv(raw) {
+  /** Parse truthy env-like values: 1/true/on/yes/y (case-insensitive). */
   if (raw == null) return false;
   const v = String(raw).trim().toLowerCase();
-  return v === "1" || v === "true" || v === "yes" || v === "on";
+  return v === "1" || v === "true" || v === "yes" || v === "y" || v === "on";
+}
+
+// PUBLIC_INTERFACE
+export function parseFeatureFlagsEnv(raw) {
+  /** Parse a comma/space-separated list of flags into a Set. */
+  return parseFlags(raw);
 }
 
 // PUBLIC_INTERFACE
 export function useFeatureFlags() {
   /** Hook returning a stable feature flag object derived from env vars. */
   return useMemo(() => {
-    const flags = parseFlags(process.env.REACT_APP_FEATURE_FLAGS);
-    const experimentsEnabled = parseBoolean(process.env.REACT_APP_EXPERIMENTS_ENABLED);
+    const flags = parseFeatureFlagsEnv(process.env.REACT_APP_FEATURE_FLAGS);
+    const experimentsEnabled = parseBooleanEnv(process.env.REACT_APP_EXPERIMENTS_ENABLED);
 
     return {
       experimentsEnabled,
