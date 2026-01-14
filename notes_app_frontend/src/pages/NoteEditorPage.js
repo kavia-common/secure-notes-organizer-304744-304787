@@ -2,9 +2,11 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useNotes } from "../state/NotesContext";
 import { createNoteDraft, normalizeTags, NOTE_COLORS, PRIORITIES, renderMarkdownToHtml } from "../utils/notes";
+import { useDebouncedValue } from "../utils/useDebouncedValue";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 import { Select } from "../components/ui/Select";
+import { TagChip } from "../components/ui/TagChip";
 import { Textarea } from "../components/ui/Textarea";
 
 /**
@@ -14,7 +16,7 @@ import { Textarea } from "../components/ui/Textarea";
 export function NoteEditorPage({ mode }) {
   const { noteId } = useParams();
   const nav = useNavigate();
-  const { createNote, updateNote, getNoteById } = useNotes();
+  const { createNote, updateNote, getNoteById, allTags } = useNotes();
 
   const existing = mode === "edit" ? getNoteById(noteId) : null;
 
@@ -40,6 +42,34 @@ export function NoteEditorPage({ mode }) {
   const setField = (key, value) => setDraft((d) => ({ ...d, [key]: value }));
 
   const tagString = useMemo(() => (draft.tags || []).join(", "), [draft.tags]);
+
+  const [tagInput, setTagInput] = useState("");
+  const debouncedTagInput = useDebouncedValue(tagInput, 150);
+
+  const selectedTags = useMemo(() => normalizeTags(draft.tags || []), [draft.tags]);
+
+  const suggestedTags = useMemo(() => {
+    const q = String(debouncedTagInput || "").trim().toLowerCase();
+    const selected = new Set(selectedTags.map((t) => t.toLowerCase()));
+    const candidates = (allTags || []).filter((t) => !selected.has(String(t).toLowerCase()));
+
+    if (!q) return candidates.slice(0, 12);
+
+    return candidates
+      .filter((t) => String(t).toLowerCase().includes(q))
+      .slice(0, 12);
+  }, [allTags, debouncedTagInput, selectedTags]);
+
+  const addTag = (raw) => {
+    const next = normalizeTags([...(draft.tags || []), raw]);
+    setField("tags", next);
+  };
+
+  const removeTag = (raw) => {
+    const target = String(raw || "").trim().toLowerCase();
+    const next = normalizeTags(draft.tags || []).filter((t) => String(t).toLowerCase() !== target);
+    setField("tags", next);
+  };
 
   const canSave = useMemo(() => {
     // allow empty content, but require at least a title or content
@@ -155,12 +185,85 @@ export function NoteEditorPage({ mode }) {
 
             <div style={{ height: 10 }} />
 
-            <Input
-              label="Tags (comma-separated)"
-              value={tagString}
-              placeholder="work, personal, ideas"
-              onChange={(v) => setField("tags", normalizeTags(v))}
-            />
+            <div className="panel" style={{ borderRadius: 18 }}>
+              <div className="panelHeader">
+                <div className="h2">Tags</div>
+                <div className="muted" style={{ marginTop: 6, fontSize: 13 }}>
+                  Add existing tags fast, or type new ones.
+                </div>
+              </div>
+              <div className="panelBody">
+                {(selectedTags || []).length ? (
+                  <>
+                    <div className="label">Selected</div>
+                    <div className="rowWrap">
+                      {(selectedTags || []).map((t) => (
+                        <TagChip key={t} tag={t} selected onClick={() => removeTag(t)} />
+                      ))}
+                    </div>
+                    <div className="divider" />
+                  </>
+                ) : (
+                  <div className="muted" style={{ fontSize: 13 }}>
+                    No tags yet.
+                    <div style={{ marginTop: 6 }}>
+                      Try <span className="kbd">work</span>, <span className="kbd">personal</span>,{" "}
+                      <span className="kbd">ideas</span>.
+                    </div>
+                    <div className="divider" />
+                  </div>
+                )}
+
+                <Input
+                  label="Add tag"
+                  value={tagInput}
+                  placeholder="Type to search existing tags…"
+                  onChange={(v) => setTagInput(v)}
+                  rightSlot={
+                    <Button
+                      variant="ghost"
+                      onClick={() => {
+                        const trimmed = String(tagInput || "").trim();
+                        if (!trimmed) return;
+                        addTag(trimmed);
+                        setTagInput("");
+                      }}
+                      ariaLabel="Add tag"
+                    >
+                      Add
+                    </Button>
+                  }
+                />
+
+                {suggestedTags.length ? (
+                  <div style={{ marginTop: 10 }}>
+                    <div className="label">Suggestions</div>
+                    <div className="rowWrap">
+                      {suggestedTags.map((t) => (
+                        <TagChip
+                          key={t}
+                          tag={t}
+                          selected={false}
+                          onClick={() => {
+                            addTag(t);
+                            setTagInput("");
+                          }}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+
+                <div className="divider" />
+
+                <Input
+                  label="Tags (comma-separated)"
+                  value={tagString}
+                  placeholder="work, personal, ideas"
+                  onChange={(v) => setField("tags", normalizeTags(v))}
+                />
+              </div>
+            </div>
           </div>
 
           <div style={{ width: 320, minWidth: 260 }}>

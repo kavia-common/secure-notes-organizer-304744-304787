@@ -1,7 +1,8 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useNotes } from "../state/NotesContext";
 import { filterNotes, NOTE_COLORS, noteSnippet, sortNotes } from "../utils/notes";
+import { useDebouncedValue } from "../utils/useDebouncedValue";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 import { Select } from "../components/ui/Select";
@@ -14,21 +15,22 @@ export function NotesListPage() {
   const { notes, hydrated, togglePinned } = useNotes();
   const [params, setParams] = useSearchParams();
 
-  const [query, setQuery] = useState(params.get("q") || "");
   const tag = params.get("tag") || "";
+
+  // Keep local input state for immediate typing responsiveness; sync URL via debounce.
+  const [queryInput, setQueryInput] = useState(params.get("q") || "");
+  const debouncedQuery = useDebouncedValue(queryInput, 250);
+
   const [priority, setPriority] = useState(params.get("p") || "");
   const [sortKey, setSortKey] = useState(params.get("sort") || "updated");
 
-  const filtered = useMemo(() => {
-    const list = filterNotes(notes, { query, tag, priority });
-    return sortNotes(list, sortKey);
-  }, [notes, query, tag, priority, sortKey]);
-
-  const tagsForQuick = useMemo(() => {
-    const s = new Set();
-    for (const n of notes) for (const t of n.tags || []) s.add(t);
-    return Array.from(s).slice(0, 10);
-  }, [notes]);
+  // Ensure local state stays in sync when user navigates back/forward or sidebar changes params.
+  useEffect(() => {
+    setQueryInput(params.get("q") || "");
+    setPriority(params.get("p") || "");
+    setSortKey(params.get("sort") || "updated");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params.toString()]);
 
   const setParam = (key, val) => {
     const next = new URLSearchParams(params);
@@ -36,6 +38,24 @@ export function NotesListPage() {
     else next.set(key, val);
     setParams(next);
   };
+
+  // Debounced URL updates for q only.
+  useEffect(() => {
+    const trimmed = debouncedQuery.trim();
+    setParam("q", trimmed ? debouncedQuery : "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [debouncedQuery]);
+
+  const filtered = useMemo(() => {
+    const list = filterNotes(notes, { query: debouncedQuery, tag, priority });
+    return sortNotes(list, sortKey);
+  }, [notes, debouncedQuery, tag, priority, sortKey]);
+
+  const tagsForQuick = useMemo(() => {
+    const s = new Set();
+    for (const n of notes) for (const t of n.tags || []) s.add(t);
+    return Array.from(s).slice(0, 10);
+  }, [notes]);
 
   const colorMap = useMemo(() => {
     const m = new Map(NOTE_COLORS.map((c) => [c.id, c.swatch]));
@@ -63,14 +83,19 @@ export function NotesListPage() {
           <div style={{ flex: 1, minWidth: 260 }}>
             <Input
               label="Search"
-              value={query}
+              value={queryInput}
               placeholder="Search title, content, tags…"
               onChange={(v) => {
-                setQuery(v);
-                setParam("q", v.trim() ? v : "");
+                setQueryInput(v);
               }}
               rightSlot={
-                <Button variant="ghost" onClick={() => { setQuery(""); setParam("q", ""); }}>
+                <Button
+                  variant="ghost"
+                  onClick={() => {
+                    setQueryInput("");
+                    setParam("q", "");
+                  }}
+                >
                   Clear
                 </Button>
               }

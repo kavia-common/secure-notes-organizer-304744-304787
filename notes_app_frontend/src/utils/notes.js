@@ -50,11 +50,16 @@ export function noteSnippet(content) {
 
 // PUBLIC_INTERFACE
 export function sortNotes(notes, sortKey) {
-  /** Sort notes by key. */
+  /** Sort notes by key with deterministic tie-breakers (stable across filters/search). */
   const list = [...notes];
+
   const byUpdated = (a, b) => (b.updatedAt || 0) - (a.updatedAt || 0);
   const byCreated = (a, b) => (b.createdAt || 0) - (a.createdAt || 0);
-  const byTitle = (a, b) => String(a.title || "").localeCompare(String(b.title || ""));
+  const byTitle = (a, b) =>
+    String(a.title || "").localeCompare(String(b.title || ""), undefined, { sensitivity: "base" });
+
+  // Stable tie-breaker: id (or createdAt) ensures deterministic ordering even when sort keys tie.
+  const byId = (a, b) => String(a.id || "").localeCompare(String(b.id || ""));
 
   list.sort((a, b) => {
     // pinned first
@@ -62,9 +67,19 @@ export function sortNotes(notes, sortKey) {
     const bp = b.pinned ? 1 : 0;
     if (ap !== bp) return bp - ap;
 
-    if (sortKey === "created") return byCreated(a, b);
-    if (sortKey === "title") return byTitle(a, b);
-    return byUpdated(a, b);
+    let primary = 0;
+    if (sortKey === "created") primary = byCreated(a, b);
+    else if (sortKey === "title") primary = byTitle(a, b);
+    else primary = byUpdated(a, b);
+
+    if (primary !== 0) return primary;
+
+    // Secondary tie-breakers for stability across filters:
+    // - For title sort, fall back to updated date; otherwise fall back to title.
+    const secondary = sortKey === "title" ? byUpdated(a, b) : byTitle(a, b);
+    if (secondary !== 0) return secondary;
+
+    return byId(a, b);
   });
 
   return list;
@@ -95,18 +110,41 @@ export function filterNotes(notes, { query, tag, priority }) {
  * - Converts links [text](url)
  */
 function escapeHtml(s) {
+  // Important: this is our primary XSS defense; everything starts escaped.
   return String(s || "")
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function isSafeHttpUrl(url) {
+  // Only allow http/https links. Disallow javascript:, data:, etc.
+  try {
+    const u = new URL(url);
+    return u.protocol === "http:" || u.protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 function inlineMarkdown(s) {
   let out = escapeHtml(s);
+
+  // Basic formatting after escaping is safe because we only inject known tags.
   out = out.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
   out = out.replace(/`(.+?)`/g, "<code>$1</code>");
-  out = out.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
+
+  // Convert links but only if URL is safe.
+  // Note: because content is escaped, $2 will not contain quotes or '<' etc. Still, we validate protocol.
+  out = out.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (match, text, url) => {
+    if (!isSafeHttpUrl(url)) return `${text} (${url})`;
+    const safeText = String(text || "");
+    const safeUrl = String(url || "");
+    return `<a href="${safeUrl}" target="_blank" rel="noreferrer noopener">${safeText}</a>`;
+  });
+
   return out;
 }
 
